@@ -222,53 +222,48 @@
         }
 
         // Procesar Excel con SheetJS
-        document.getElementById('excelFile').addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if(!file) return;
-
-            const statusEl = document.getElementById('excelStatus');
-            statusEl.innerHTML = `<span class="text-blue-500">Cargando archivo...</span>`;
-            
-            const reader = new FileReader();
-            
-            reader.onload = (e) => {
-                try {
-                    const data = new Uint8Array(e.target.result);
-                    const workbook = XLSX.read(data, {type: 'array'});
-                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                    const jsonSheet = XLSX.utils.sheet_to_json(firstSheet);
-                    
-                    maestroUbicaciones = {}; // Reiniciar
-                    let count = 0;
-                    
-                    jsonSheet.forEach(row => {
-                        let skuVal, ubiVal;
-                        // Búsqueda flexible de columnas
-                        for(let key in row) {
-                            if(key.toUpperCase().includes('SKU')) skuVal = row[key];
-                            if(key.toUpperCase().includes('UBICA') || key.toUpperCase().includes('UBICI')) ubiVal = row[key];
-                        }
-                        
-                        if(skuVal && ubiVal) {
-                            maestroUbicaciones[String(skuVal).trim()] = String(ubiVal).trim();
-                            count++;
-                        }
-                    });
-
-                    statusEl.innerHTML = `<span class="text-green-600 font-bold">✅ Maestro cargado: ${count} SKUs registrados.</span>`;
-                } catch(err) {
-                    statusEl.innerHTML = `<span class="text-red-500 font-bold">❌ Error leyendo el Excel. Verifica el formato.</span>`;
-                }
-            };
-            reader.readAsArrayBuffer(file);
-        });
-
-        // Convertir imagen a Base64
-        function fileToBase64(file) {
+        // Convertir imagen a Base64 y Comprimirla (NUEVO MÉTODO)
+        function procesarImagenBase64(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
-                reader.onload = () => resolve(reader.result.split(',')[1]); 
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        // Crear canvas para comprimir y achicar la imagen
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 1200; // Reducir tamaño para evitar errores de payload y lentitud
+                        const MAX_HEIGHT = 1200;
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > height) {
+                            if (width > MAX_WIDTH) {
+                                height *= MAX_WIDTH / width;
+                                width = MAX_WIDTH;
+                            }
+                        } else {
+                            if (height > MAX_HEIGHT) {
+                                width *= MAX_HEIGHT / height;
+                                height = MAX_HEIGHT;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        // Forzar a JPEG al 80% de calidad (suficiente para OCR y ultra ligero)
+                        const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+                        resolve({
+                            base64: dataURL.split(',')[1],
+                            mimeType: 'image/jpeg'
+                        });
+                    };
+                    img.onerror = error => reject("Error al procesar la imagen localmente.");
+                    img.src = e.target.result;
+                };
                 reader.onerror = error => reject(error);
             });
         }
@@ -292,18 +287,19 @@
             statusEl.innerHTML = `
                 <div class="flex items-center justify-center gap-2 text-blue-600">
                     <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    Analizando la orden con IA. Un momento...
+                    Optimizando foto y analizando con IA...
                 </div>
             `;
 
             try {
-                const base64Image = await fileToBase64(file);
+                // Usamos la nueva función que achica la imagen
+                const imageData = await procesarImagenBase64(file);
                 
                 const payload = {
                     contents: [{
                         parts: [
                             { text: "Eres un asistente de almacén experto. Extrae todos los códigos de producto (SKUs) y las cantidades solicitadas de esta foto de una orden de surtido. IMPORTANTE: Devuelve ÚNICAMENTE un arreglo JSON válido con el formato exacto: [{\"sku\": \"codigo123\", \"cantidad\": 2}]. No agregues comillas invertidas (```json), ni etiquetas markdown, ni texto explicativo. Solo el arreglo JSON crudo." },
-                            { inline_data: { mime_type: file.type, data: base64Image } }
+                            { inline_data: { mime_type: imageData.mimeType, data: imageData.base64 } }
                         ]
                     }],
                     generationConfig: {
@@ -317,7 +313,11 @@
                     body: JSON.stringify(payload)
                 });
 
-                if(!response.ok) throw new Error("Error de conexión. Verifica tu API Key o tu red.");
+                if(!response.ok) {
+                    // Ahora atrapamos la verdadera razón del error dada por Google
+                    const errorData = await response.json();
+                    throw new Error(errorData.error?.message || "Error desconocido devuelto por Google.");
+                }
 
                 const data = await response.json();
                 
