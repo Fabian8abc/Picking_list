@@ -222,6 +222,49 @@
         }
 
         // Procesar Excel con SheetJS
+        document.getElementById('excelFile').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            
+            const excelStatus = document.getElementById('excelStatus');
+            excelStatus.innerHTML = `<span class="text-blue-500 font-medium">Procesando archivo...</span>`;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, {type: 'array'});
+                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const jsonSheet = XLSX.utils.sheet_to_json(firstSheet);
+                    
+                    let count = 0;
+                    maestroUbicaciones = {}; // Limpiar maestro por si se sube otro archivo
+                    
+                    jsonSheet.forEach(row => {
+                        const keys = Object.keys(row);
+                        // Búsqueda flexible de columnas
+                        const skuKey = keys.find(k => k.toLowerCase().trim() === 'sku' || k.toLowerCase().trim() === 'producto');
+                        const ubiKey = keys.find(k => k.toLowerCase().trim() === 'ubicacion' || k.toLowerCase().trim() === 'ubicación');
+
+                        if(skuKey && ubiKey && row[skuKey] && row[ubiKey]) {
+                            maestroUbicaciones[String(row[skuKey]).trim()] = String(row[ubiKey]).trim();
+                            count++;
+                        }
+                    });
+                    
+                    if(count > 0) {
+                        excelStatus.innerHTML = `<span class="text-green-600 font-semibold">✅ Maestro listo: ${count} productos registrados.</span>`;
+                    } else {
+                        excelStatus.innerHTML = `<span class="text-red-500 font-semibold">⚠️ No se encontró la columna "SKU" (o "Producto") y "Ubicacion".</span>`;
+                    }
+                } catch (error) {
+                    console.error(error);
+                    excelStatus.innerHTML = `<span class="text-red-500 font-semibold">❌ Error al leer el Excel.</span>`;
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
         // Convertir imagen a Base64 y Comprimirla (NUEVO MÉTODO)
         function procesarImagenBase64(file) {
             return new Promise((resolve, reject) => {
